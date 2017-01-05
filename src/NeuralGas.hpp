@@ -11,32 +11,39 @@
 
 class NeuralGas {
 public:
-    using Vector = Eigen::Matrix<double, Eigen::Dynamic, 1>;
+    using Vector = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic>;
     using Distance = std::function<double (const Vector&, const Vector&)>;
+
     class Edge;
     class Neuron;
-
-    struct Edge {
-        Edge(Neuron*, Neuron*);
-        std::shared_ptr<Neuron> extr1;
-        std::shared_ptr<Neuron> extr2;
-    };
+    using EdgePtr = std::shared_ptr<Edge>;
+    using NeuronPtr = std::shared_ptr<Neuron>;
 
     class Neuron {
     public:
         Neuron(const Vector&);
         Neuron(const Neuron&) = delete;
         Neuron& operator=(const Neuron&) = delete;
-        void addNeighbour(Edge*);
+        void addEdge(const EdgePtr&);
+        void removeEdge(const EdgePtr&);
+        void removeOldestEdges(unsigned int);
+        void increaseEdgesAge();
         Vector referent;
-        std::forward_list<Edge> edges;
+        std::forward_list<EdgePtr> edges;
+    };
+
+    struct Edge {
+        Edge(const NeuronPtr&, const NeuronPtr&);
+        NeuronPtr extr1;
+        NeuronPtr extr2;
+        unsigned int age;
     };
 
     struct LearningParams {
         LearningParams() = default;
         LearningParams(unsigned int, unsigned int, double, double, double, double);
         unsigned int nodeFrequency;
-        unsigned int edgeMaxAge;
+        unsigned int maxAge;
         double epsilonB;
         double epsilonN;
         double alpha;
@@ -49,24 +56,23 @@ public:
         LearningParams,
         unsigned int);
 
+    NeuralGas(const NeuralGas&) = delete;
+    NeuralGas& operator=(const NeuralGas&) = delete;
+
     void addToDataBase(const std::vector<Vector>&);
     void learnFromDataBase(unsigned int);
-    const Neuron& findBestNeuron(const Vector&) const;
-    const Neuron& learnFrom(const Vector&);
+    const Vector& learnFrom(const Vector&);
+
+    ~NeuralGas();
 
 private:
 
-    void addNeuron(const Vector&);
-
-    // TODO change pointers
-    void addEdge(NeuralGas::Neuron*, NeuralGas::Neuron*);
-    void deleteEdge(NeuralGas::Edge*);
-
-    // TODO change pointer
-    void deleteNeighbours(NeuralGas::Neuron*);
     void performIteration(const Vector&);
-
-    void clearNodes();
+    std::pair<NeuronPtr, NeuronPtr> findBestNeurons(const Vector&) const;
+    void removeDeadNeurons();
+    const NeuronPtr& addNeuron(const NeuronPtr&);
+    void addEdge(const NeuronPtr&, const NeuronPtr&);
+    void removeEdge(EdgePtr&);
 
     unsigned int dataSize;
     Distance d;
