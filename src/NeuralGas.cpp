@@ -14,6 +14,14 @@ NeuralGas::Edge::Edge(
     const NeuronPtr& _extr2):
     extr1(_extr1), extr2(_extr2), age(0) {}
 
+const NeuronPtr& NeuralGas::Edge::neighbourOf(const NeuronPtr& origin) {
+    if (extr1 == origin)
+        return extr2;
+    if (extr2 == origin)
+        return extr1;
+    throw std::runtime_error("Request neighbour on bad edge.");
+}
+
 NeuralGas::Neuron::Neuron(const NeuralGas::Vector& _referent):
     referent(_referent) {}
 
@@ -33,8 +41,33 @@ void NeuralGas::Neuron::removeOldestEdges(unsigned int maxAge) {
 
 void NeuralGas::Neuron::increaseEdgesAge() {
     for (const auto& edge : edges) {
-        edge->age += 1;
+        edge->age = 0;
     }
+}
+
+bool NeuralGas::Neuron::updateEdgeToward(const NeuronPtr& target) {
+    for (const auto& edge : edges) {
+        if (edge->extr1 == target || edge->extr2 == target) {
+            edge->age += 1;
+            return true;
+        }
+    }
+    return false;
+}
+
+void NeuralGas::Neuron::moveNeighbours(const Vector& direction) {
+    for (const auto& edge : edges) {
+        const auto& extr = neighbour(edge);
+        extr->referent += direction;
+    }
+}
+
+const NeuronPtr& NeuralGas::Neuron::neighbour(const EdgePtr& edge) const {
+    if (edge->extr1.get() == this)
+        return edge->extr2;
+    if (edge->extr2.get() == this)
+        return edge->extr1;
+    throw std::runtime_error("Neuron have a non-adjacent edge.");
 }
 
 NeuralGas::LearningParams::LearningParams(
@@ -50,10 +83,9 @@ epsilonB(_epsilonB), epsilonN(_epsilonN), alpha(_alpha), beta(_beta) {}
 
 NeuralGas::NeuralGas(
     unsigned int _dataSize,
-    const Distance& _d,
     LearningParams _params,
     unsigned int seed):
-    dataSize(_dataSize), d(_d), params(_params), gen(seed)
+    dataSize(_dataSize), params(_params), gen(seed), nbIterations(0)
 {
     Vector v1(1, dataSize); v1.setZero();
     Vector v2(1, dataSize); v2.setConstant(1.);
@@ -90,18 +122,29 @@ const NeuralGas::Vector& NeuralGas::learnFrom(const NeuralGas::Vector& exemple) 
 }
 
 void NeuralGas::performIteration(const NeuralGas::Vector& exemple) {
+    nbIterations += 1;
+
     auto bestNeurons = findBestNeurons(exemple);
     auto& v1 = bestNeurons.first;
     auto& v2 = bestNeurons.second;
 
     v1->increaseEdgesAge();
-    // v1->updateError(d(v1->referent, exemple));
-    // move v1 and it's neighbours toward
-    // v1->updateEdgeToward(v2);
-    v1->removeOldestEdges(params.maxAge);
-    // removeDeadNeurons(); TODO change that
 
-    // add new neuron
+    Vector diff = exemple - v1->referent;
+    v1->error += diff.squaredNorm();
+
+    v1->referent += diff*params.epsilonB;
+    v1->moveNeighbours(diff * params.epsilonN);
+
+    if (!v1->updateEdgeToward(v2))
+        addEdge(v1, v2);
+
+    v1->removeOldestEdges(params.maxAge);
+
+    if (nbIterations % params.nodeFrequency == 0) {
+        removeDeadNeurons();
+        createNeuron();
+    }
 }
 
 std::pair<NeuronPtr, NeuronPtr>
@@ -110,7 +153,7 @@ NeuralGas::findBestNeurons(const NeuralGas::Vector& exemple) const {
     NeuronPtr second = nullptr; double secondD = HUGE_VAL;
     for (const auto& maybeNeuron : neurons) {
         if (auto current = maybeNeuron.lock()) {
-            double currentD = d(current->referent, exemple);
+            double currentD = (current->referent - exemple).squaredNorm();
             if (!first || currentD < firstD) {
                 second = first;
                 secondD = firstD;
@@ -126,6 +169,38 @@ NeuralGas::findBestNeurons(const NeuralGas::Vector& exemple) const {
     if (!first || !second)
         throw std::runtime_error("There is less than two neurons alive. This should never happened.");
     return std::make_pair(first, second);
+}
+
+void NeuralGas::createNeuron() {
+    auto q = std::max_element(begin(neurons), end(neurons),
+        []( const std::weak_ptr<Neuron>& weak_left,
+            const std::weak_ptr<Neuron>& weak_right) {
+                auto left = weak_left.lock();
+                auto right = weak_right.lock();
+                if (left && right)
+                    return left->error < right->error;
+                return (left && !right);
+        })->lock();
+    if (!q)
+        throw std::runtime_error("Empty neuron found.");
+    auto edgeF = *std::max_element(begin(q->edges), end(q->edges),
+            [&](const EdgePtr& leftEdge, const EdgePtr& rightEdge) {
+                auto left = leftEdge->neighbourOf(q);
+                auto right = rightEdge->neighbourOf(q);
+                return left->error < right->error;;
+        });
+    auto f = edgeF->neighbourOf(q);
+    auto r = addNeuron(make_shared<Neuron>(0.5*(q->referent + f->referent)));
+    addEdge(q, r);
+    addEdge(r, f);
+    removeEdge(edgeF);
+    q->error *= params.alpha;
+    f->error *= params.alpha;
+    for (const auto& maybeNeuron : neurons) {
+        if (auto current = maybeNeuron.lock()) {
+            current->error *= params.beta;
+        }
+    }
 }
 
 void NeuralGas::removeDeadNeurons() {

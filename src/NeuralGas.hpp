@@ -12,7 +12,6 @@
 class NeuralGas {
 public:
     using Vector = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic>;
-    using Distance = std::function<double (const Vector&, const Vector&)>;
 
     class Edge;
     class Neuron;
@@ -28,12 +27,17 @@ public:
         void removeEdge(const EdgePtr&);
         void removeOldestEdges(unsigned int);
         void increaseEdgesAge();
+        bool updateEdgeToward(const NeuronPtr&);
+        void moveNeighbours(const Vector&);
+        const NeuronPtr& neighbour(const EdgePtr&) const;
         Vector referent;
+        double error;
         std::forward_list<EdgePtr> edges;
     };
 
     struct Edge {
         Edge(const NeuronPtr&, const NeuronPtr&);
+        const NeuronPtr& neighbourOf(const NeuronPtr&);
         NeuronPtr extr1;
         NeuronPtr extr2;
         unsigned int age;
@@ -52,7 +56,6 @@ public:
 
     NeuralGas(
         unsigned int,
-        const Distance&,
         LearningParams,
         unsigned int);
 
@@ -73,10 +76,11 @@ private:
     const NeuronPtr& addNeuron(const NeuronPtr&);
     void addEdge(const NeuronPtr&, const NeuronPtr&);
     void removeEdge(EdgePtr&);
+    void createNeuron();
 
     unsigned int dataSize;
-    Distance d;
     std::default_random_engine gen;
+    unsigned int nbIterations;
     std::vector<Vector> datas;
     std::forward_list<std::weak_ptr<Neuron>> neurons;
 };
