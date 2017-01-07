@@ -22,8 +22,8 @@ const NeuronPtr& NeuralGas::Edge::neighbourOf(const NeuronPtr& origin) {
     throw std::runtime_error("Request neighbour on bad edge.");
 }
 
-NeuralGas::Neuron::Neuron(const NeuralGas::Vector& _referent):
-    referent(_referent) {}
+NeuralGas::Neuron::Neuron(const NeuralGas::Vector& _referent, double _error):
+    referent(_referent), error(_error) {}
 
 void NeuralGas::Neuron::addEdge(const EdgePtr& edge) {
     edges.emplace_front(edge);
@@ -41,14 +41,14 @@ void NeuralGas::Neuron::removeOldestEdges(unsigned int maxAge) {
 
 void NeuralGas::Neuron::increaseEdgesAge() {
     for (const auto& edge : edges) {
-        edge->age = 0;
+        edge->age += 1;
     }
 }
 
 bool NeuralGas::Neuron::updateEdgeToward(const NeuronPtr& target) {
     for (const auto& edge : edges) {
         if (edge->extr1 == target || edge->extr2 == target) {
-            edge->age += 1;
+            edge->age = 0;
             return true;
         }
     }
@@ -70,6 +70,19 @@ const NeuronPtr& NeuralGas::Neuron::neighbour(const EdgePtr& edge) const {
     throw std::runtime_error("Neuron have a non-adjacent edge.");
 }
 
+EdgePtr NeuralGas::Neuron::findMaxErrorNeighbour() const {
+    return *std::max_element(begin(edges), end(edges),
+            [&](const EdgePtr& leftEdge, const EdgePtr& rightEdge) {
+                auto left = neighbour(leftEdge);
+                auto right = neighbour(rightEdge);
+                return left->error < right->error;;
+    });
+}
+
+void NeuralGas::Neuron::clear() {
+    edges.clear();
+}
+
 NeuralGas::LearningParams::LearningParams(
     unsigned int _nodeFrequency,
     unsigned int _maxAge,
@@ -87,19 +100,33 @@ NeuralGas::NeuralGas(
     unsigned int seed):
     dataSize(_dataSize), params(_params), gen(seed), nbIterations(0)
 {
-    Vector v1(1, dataSize); v1.setZero();
-    Vector v2(1, dataSize); v2.setConstant(1.);
-    auto neuron1 = addNeuron(make_shared<Neuron>(v1));
-    auto neuron2 = addNeuron(make_shared<Neuron>(v2));
+    Vector v1 = NeuralGas::Vector::Random(dataSize, 1);
+    Vector v2 = NeuralGas::Vector::Random(dataSize, 1);
+    auto neuron1 = addNeuron(make_shared<Neuron>(v1, 0.));
+    auto neuron2 = addNeuron(make_shared<Neuron>(v2, 0.));
     addEdge(neuron1, neuron2);
 }
 
 NeuralGas::~NeuralGas() {
     for (const auto& maybeNeuron : neurons) {
         if (auto neuron = maybeNeuron.lock()) {
-            neuron->edges.clear();
+            neuron->clear();
         }
     }
+}
+
+std::vector<EdgePtr> NeuralGas::getEdges() const {
+    std::vector<EdgePtr> edges;
+    for (const auto& maybeNeuron : neurons) {
+        if (auto neuron = maybeNeuron.lock()) {
+            std::copy_if(begin(neuron->edges), end(neuron->edges),
+            std::back_inserter(edges),
+            [&](const EdgePtr& edge) {
+                return edge->extr1 == neuron;
+            });
+        }
+    }
+    return edges;
 }
 
 void NeuralGas::addToDataBase(const std::vector<NeuralGas::Vector>& newDatas) {
@@ -118,7 +145,7 @@ void NeuralGas::learnFromDataBase(unsigned int nbIterations) {
 const NeuralGas::Vector& NeuralGas::learnFrom(const NeuralGas::Vector& exemple) {
     datas.push_back(exemple);
     performIteration(exemple);
-    return exemple; // TODO change that
+    return findClosestRepresentant(exemple);
 }
 
 void NeuralGas::performIteration(const NeuralGas::Vector& exemple) {
@@ -134,7 +161,7 @@ void NeuralGas::performIteration(const NeuralGas::Vector& exemple) {
     v1->error += diff.squaredNorm();
 
     v1->referent += diff*params.epsilonB;
-    v1->moveNeighbours(diff * params.epsilonN);
+    v1->moveNeighbours(diff*params.epsilonN);
 
     if (!v1->updateEdgeToward(v2))
         addEdge(v1, v2);
@@ -145,6 +172,11 @@ void NeuralGas::performIteration(const NeuralGas::Vector& exemple) {
         removeDeadNeurons();
         createNeuron();
     }
+}
+
+const NeuralGas::Vector& NeuralGas::findClosestRepresentant(const Vector& exemple) {
+    auto bestNeurons = findBestNeurons(exemple);
+    return bestNeurons.first->referent;
 }
 
 std::pair<NeuronPtr, NeuronPtr>
@@ -172,6 +204,25 @@ NeuralGas::findBestNeurons(const NeuralGas::Vector& exemple) const {
 }
 
 void NeuralGas::createNeuron() {
+    auto q = findMaxErrorNeuron();
+    auto edgeF = q->findMaxErrorNeighbour();
+    auto f = edgeF->neighbourOf(q);
+    q->error *= params.alpha;
+    f->error *= params.alpha;
+    auto r = addNeuron(make_shared<Neuron>(0.5*(q->referent + f->referent), q->error));
+    addEdge(q, r);
+    addEdge(r, f);
+    removeEdge(edgeF);
+    for (const auto& maybeNeuron : neurons) {
+        if (auto current = maybeNeuron.lock()) {
+            if (current == q || current == f)
+                continue ;
+            current->error *= params.beta;
+        }
+    }
+}
+
+NeuronPtr NeuralGas::findMaxErrorNeuron() const {
     auto q = std::max_element(begin(neurons), end(neurons),
         []( const std::weak_ptr<Neuron>& weak_left,
             const std::weak_ptr<Neuron>& weak_right) {
@@ -183,24 +234,7 @@ void NeuralGas::createNeuron() {
         })->lock();
     if (!q)
         throw std::runtime_error("Empty neuron found.");
-    auto edgeF = *std::max_element(begin(q->edges), end(q->edges),
-            [&](const EdgePtr& leftEdge, const EdgePtr& rightEdge) {
-                auto left = leftEdge->neighbourOf(q);
-                auto right = rightEdge->neighbourOf(q);
-                return left->error < right->error;;
-        });
-    auto f = edgeF->neighbourOf(q);
-    auto r = addNeuron(make_shared<Neuron>(0.5*(q->referent + f->referent)));
-    addEdge(q, r);
-    addEdge(r, f);
-    removeEdge(edgeF);
-    q->error *= params.alpha;
-    f->error *= params.alpha;
-    for (const auto& maybeNeuron : neurons) {
-        if (auto current = maybeNeuron.lock()) {
-            current->error *= params.beta;
-        }
-    }
+    return q;
 }
 
 void NeuralGas::removeDeadNeurons() {

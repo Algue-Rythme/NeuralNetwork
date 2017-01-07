@@ -20,7 +20,7 @@ public:
 
     class Neuron {
     public:
-        Neuron(const Vector&);
+        Neuron(const Vector&, double);
         Neuron(const Neuron&) = delete;
         Neuron& operator=(const Neuron&) = delete;
         void addEdge(const EdgePtr&);
@@ -30,6 +30,9 @@ public:
         bool updateEdgeToward(const NeuronPtr&);
         void moveNeighbours(const Vector&);
         const NeuronPtr& neighbour(const EdgePtr&) const;
+        EdgePtr findMaxErrorNeighbour() const;
+        void clear();
+
         Vector referent;
         double error;
         std::forward_list<EdgePtr> edges;
@@ -65,6 +68,8 @@ public:
     void addToDataBase(const std::vector<Vector>&);
     void learnFromDataBase(unsigned int);
     const Vector& learnFrom(const Vector&);
+    const Vector& findClosestRepresentant(const Vector&);
+    std::vector<EdgePtr> getEdges() const;
 
     ~NeuralGas();
 
@@ -72,6 +77,7 @@ private:
 
     void performIteration(const Vector&);
     std::pair<NeuronPtr, NeuronPtr> findBestNeurons(const Vector&) const;
+    NeuronPtr findMaxErrorNeuron() const;
     void removeDeadNeurons();
     const NeuronPtr& addNeuron(const NeuronPtr&);
     void addEdge(const NeuronPtr&, const NeuronPtr&);
